@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      kotlin-and-ktor:
+        patterns: ["org.jetbrains.kotlin*", "io.ktor*"]
+      test-tooling:
+        patterns: ["io.kotest*", "org.testcontainers*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

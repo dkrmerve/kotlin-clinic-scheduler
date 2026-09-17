@@ -1,0 +1,211 @@
+{
+  "info": {
+    "name": "Clinic Scheduler",
+    "description": "End-to-end walkthrough: mint dev tokens, create a practitioner and patients, check availability, book, provoke a slot conflict, join the waitlist, cancel and watch the waitlist promotion. Run the folder top to bottom (Collection Runner) against the 'local' environment; each request stores the ids the next one needs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [{ "key": "baseUrl", "value": "http://localhost:8080" }],
+  "item": [
+    {
+      "name": "00 Health (anonymous)",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health/ready" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('ready', () => pm.response.to.have.status(200));",
+        "pm.test('database up', () => pm.expect(pm.response.json().database).to.eql('UP'));"
+      ] } }]
+    },
+    {
+      "name": "01 Token - admin",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/auth/token",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"subject\": \"admin-1\",\n  \"role\": \"admin\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('token issued', () => pm.response.to.have.status(200));",
+        "pm.environment.set('adminToken', pm.response.json().accessToken);"
+      ] } }]
+    },
+    {
+      "name": "02 Token - clinic staff",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/auth/token",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"subject\": \"front-desk-1\",\n  \"role\": \"clinic_staff\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('token issued', () => pm.response.to.have.status(200));",
+        "pm.environment.set('staffToken', pm.response.json().accessToken);"
+      ] } }]
+    },
+    {
+      "name": "03 Create practitioner (admin)",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/practitioners",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"name\": \"Dr. Ada Lovelace\",\n  \"specialty\": \"General practice\",\n  \"slotMinutes\": 15,\n  \"bufferMinutes\": 5,\n  \"maxAppointmentsPerDay\": 12,\n  \"schedule\": {\n    \"MONDAY\": {\"start\": \"09:00\", \"end\": \"17:00\"},\n    \"TUESDAY\": {\"start\": \"09:00\", \"end\": \"17:00\"},\n    \"WEDNESDAY\": {\"start\": \"09:00\", \"end\": \"17:00\"},\n    \"THURSDAY\": {\"start\": \"09:00\", \"end\": \"17:00\"},\n    \"FRIDAY\": {\"start\": \"09:00\", \"end\": \"13:00\"}\n  }\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('201 with Location', () => { pm.response.to.have.status(201); pm.expect(pm.response.headers.get('Location')).to.include('/practitioners/'); });",
+        "pm.environment.set('practitionerId', pm.response.json().id);"
+      ] } }]
+    },
+    {
+      "name": "04 Create patient (staff)",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/patients",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{staffToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"name\": \"Grace Hopper\",\n  \"email\": \"grace.{{$randomInt}}@example.test\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('201', () => pm.response.to.have.status(201));",
+        "pm.environment.set('patientId', pm.response.json().id);"
+      ] } }]
+    },
+    {
+      "name": "05 Create second patient (staff)",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/patients",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{staffToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"name\": \"Linus Torvalds\",\n  \"email\": \"linus.{{$randomInt}}@example.test\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('201', () => pm.response.to.have.status(201));",
+        "pm.environment.set('otherPatientId', pm.response.json().id);"
+      ] } }]
+    },
+    {
+      "name": "06 Token - patient (sub = patient id)",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/auth/token",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"subject\": \"{{patientId}}\",\n  \"role\": \"patient\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('token issued', () => pm.response.to.have.status(200));",
+        "pm.environment.set('patientToken', pm.response.json().accessToken);"
+      ] } }]
+    },
+    {
+      "name": "07 Availability (next weekday, Consultation)",
+      "event": [
+        { "listen": "prerequest", "script": { "exec": [
+          "const d = new Date(); d.setUTCDate(d.getUTCDate() + 3);",
+          "while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);",
+          "pm.environment.set('date', d.toISOString().substring(0, 10));"
+        ] } },
+        { "listen": "test", "script": { "exec": [
+          "pm.test('200 with slots', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().slots.length).to.be.above(0); });",
+          "pm.environment.set('slot', pm.response.json().slots[4]);"
+        ] } }
+      ],
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/practitioners/{{practitionerId}}/availability?date={{date}}&type=Consultation", "host": ["{{baseUrl}}"], "path": ["practitioners", "{{practitionerId}}", "availability"], "query": [{ "key": "date", "value": "{{date}}" }, { "key": "type", "value": "Consultation" }] },
+        "header": [{ "key": "Authorization", "value": "Bearer {{patientToken}}" }]
+      }
+    },
+    {
+      "name": "08 Book (patient books own appointment)",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/appointments",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{patientToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"practitionerId\": \"{{practitionerId}}\",\n  \"patientId\": \"{{patientId}}\",\n  \"type\": \"Consultation\",\n  \"start\": \"{{slot}}\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('201 Booked with history', () => { pm.response.to.have.status(201); const a = pm.response.json(); pm.expect(a.status).to.eql('Booked'); pm.expect(a.history.length).to.eql(1); });",
+        "pm.environment.set('appointmentId', pm.response.json().id);"
+      ] } }]
+    },
+    {
+      "name": "09 Book the same slot for another patient -> 409 slot_taken",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/appointments",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{staffToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"practitionerId\": \"{{practitionerId}}\",\n  \"patientId\": \"{{otherPatientId}}\",\n  \"type\": \"Consultation\",\n  \"start\": \"{{slot}}\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('409 slot_taken problem+json', () => { pm.response.to.have.status(409); pm.expect(pm.response.json().code).to.eql('slot_taken'); pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'); });"
+      ] } }]
+    },
+    {
+      "name": "10 Join the waitlist for that day",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/waitlist",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{staffToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"practitionerId\": \"{{practitionerId}}\",\n  \"patientId\": \"{{otherPatientId}}\",\n  \"date\": \"{{date}}\",\n  \"type\": \"Consultation\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('201 Waiting', () => { pm.response.to.have.status(201); pm.expect(pm.response.json().status).to.eql('Waiting'); });",
+        "pm.environment.set('waitlistEntryId', pm.response.json().id);"
+      ] } }]
+    },
+    {
+      "name": "11 Cancel (patient, >= 24h before) -> waitlist promotion",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/appointments/{{appointmentId}}/cancel",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{patientToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"note\": \"Feeling better already\"\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('cancelled, not late', () => { pm.response.to.have.status(200); const r = pm.response.json(); pm.expect(r.appointment.status).to.eql('Cancelled'); pm.expect(r.appointment.lateCancellation).to.eql(false); });",
+        "pm.test('waitlist promoted into the freed slot', () => { const p = pm.response.json().waitlistPromotion; pm.expect(p).to.not.eql(null); pm.expect(p.promotedFromWaitlist).to.eql(true); pm.expect(p.patientId).to.eql(pm.environment.get('otherPatientId')); });"
+      ] } }]
+    },
+    {
+      "name": "12 Waitlist entry is Fulfilled",
+      "request": {
+        "method": "GET", "url": "{{baseUrl}}/waitlist/{{waitlistEntryId}}",
+        "header": [{ "key": "Authorization", "value": "Bearer {{staffToken}}" }]
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('Fulfilled with the promoted appointment id', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('Fulfilled'); pm.expect(pm.response.json().fulfilledBy).to.be.a('string'); });"
+      ] } }]
+    },
+    {
+      "name": "13 Appointment history (rule 11)",
+      "request": {
+        "method": "GET", "url": "{{baseUrl}}/appointments/{{appointmentId}}",
+        "header": [{ "key": "Authorization", "value": "Bearer {{staffToken}}" }]
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('two history entries: Booked, Cancelled', () => { const h = pm.response.json().history; pm.expect(h.map(e => e.to)).to.eql(['Booked', 'Cancelled']); });"
+      ] } }]
+    },
+    {
+      "name": "14 Patient may not read another patient -> 403 not_owner",
+      "request": {
+        "method": "GET", "url": "{{baseUrl}}/patients/{{otherPatientId}}",
+        "header": [{ "key": "Authorization", "value": "Bearer {{patientToken}}" }]
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('403 not_owner', () => { pm.response.to.have.status(403); pm.expect(pm.response.json().code).to.eql('not_owner'); });"
+      ] } }]
+    },
+    {
+      "name": "15 No token -> 401 unauthenticated",
+      "request": { "method": "GET", "url": "{{baseUrl}}/practitioners/{{practitionerId}}" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('401', () => { pm.response.to.have.status(401); pm.expect(pm.response.json().code).to.eql('unauthenticated'); });"
+      ] } }]
+    },
+    {
+      "name": "16 Validation errors are collected -> 400 validation_failed",
+      "request": {
+        "method": "POST", "url": "{{baseUrl}}/practitioners",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+        "body": { "mode": "raw", "raw": "{\n  \"name\": \" \",\n  \"specialty\": \"\",\n  \"slotMinutes\": 7,\n  \"maxAppointmentsPerDay\": 0,\n  \"schedule\": {\"FUNDAY\": {\"start\": \"09:00\", \"end\": \"17:00\"}}\n}" }
+      },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('400 with an errors map', () => { pm.response.to.have.status(400); const p = pm.response.json(); pm.expect(p.code).to.eql('validation_failed'); pm.expect(Object.keys(p.errors)).to.include.members(['name', 'specialty', 'slotMinutes', 'maxAppointmentsPerDay', 'schedule.FUNDAY']); });"
+      ] } }]
+    },
+    {
+      "name": "17 Metrics (Prometheus)",
+      "request": { "method": "GET", "url": "{{baseUrl}}/metrics" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('exposition format', () => { pm.response.to.have.status(200); pm.expect(pm.response.text()).to.include('ktor_http_server_requests'); });"
+      ] } }]
+    }
+  ]
+}

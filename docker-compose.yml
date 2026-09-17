@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clinic}
+      POSTGRES_USER: ${POSTGRES_USER:-clinic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clinic}
+    ports:
+      - "5432:5432"
+    volumes:
+      - clinic-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clinic} -d ${POSTGRES_DB:-clinic}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    image: kotlin-clinic-scheduler:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-clinic}
+      DATABASE_USER: ${POSTGRES_USER:-clinic}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-clinic}
+      AUTH_DEV_SIGNING_KEY: ${AUTH_DEV_SIGNING_KEY:-dev-only-signing-key-change-me-0123456789abcdef}
+      AUTH_DEV_ISSUER: ${AUTH_DEV_ISSUER:-clinic-scheduler-dev}
+      AUTH_DEV_ISSUER_ENABLED: ${AUTH_DEV_ISSUER_ENABLED:-true}
+      CLINIC_ZONE: ${CLINIC_ZONE:-Europe/Amsterdam}
+      BOOKING_HORIZON_DAYS: ${BOOKING_HORIZON_DAYS:-60}
+      FREE_CANCEL_HOURS: ${FREE_CANCEL_HOURS:-24}
+      MIN_CANCEL_HOURS: ${MIN_CANCEL_HOURS:-2}
+      NO_SHOW_LIMIT: ${NO_SHOW_LIMIT:-3}
+      NO_SHOW_WINDOW_DAYS: ${NO_SHOW_WINDOW_DAYS:-90}
+      BLOCK_DAYS: ${BLOCK_DAYS:-30}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-65536}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+volumes:
+  clinic-pgdata:

@@ -1,0 +1,13 @@
+.git
+.gradle
+.idea
+.kotlin
+build
+*.iml
+.env
+docs
+postman
+scripts
+README.md
+CONTRIBUTING.md
+LICENSE
