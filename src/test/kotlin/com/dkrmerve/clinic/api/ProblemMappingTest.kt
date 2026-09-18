@@ -138,4 +138,26 @@ class ProblemMappingTest :
                 }
             }
         }
+
+        context("database concurrency SQLSTATEs") {
+            test("a deadlock (40P01) or serialization failure (40001) -> 409 concurrent_modification, retryable") {
+                clinicApp(
+                    extraRoutes = { deps ->
+                        get("/deadlock") {
+                            transaction(
+                                deps.database.database,
+                            ) { throw ExposedSQLException(SQLException("deadlock detected", "40P01"), emptyList(), this) }
+                        }
+                        get("/serialization") {
+                            transaction(
+                                deps.database.database,
+                            ) { throw ExposedSQLException(SQLException("could not serialize", "40001"), emptyList(), this) }
+                        }
+                    },
+                ) {
+                    client.get("/deadlock").shouldBeProblem(HttpStatusCode.Conflict, "concurrent_modification")
+                    client.get("/serialization").shouldBeProblem(HttpStatusCode.Conflict, "concurrent_modification")
+                }
+            }
+        }
     })

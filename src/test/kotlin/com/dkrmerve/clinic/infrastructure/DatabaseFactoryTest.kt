@@ -104,9 +104,23 @@ class PostgresSchemaTest :
                         generateSequence { if (rs.next()) rs.getString(1) else null }.toList()
                     }!!
                 }
-            io.kotest.assertions.withClue("history=$rows indexes=$indexes") {
-                rows.any { it.startsWith("2 ") } shouldBe true
+            val waitlistIndexes =
+                transaction(TestDatabases.shared.database) {
+                    exec("SELECT indexdef FROM pg_indexes WHERE tablename = 'waitlist_entries'") { rs ->
+                        generateSequence { if (rs.next()) rs.getString(1) else null }.toList()
+                    }!!
+                }
+            val tables =
+                transaction(TestDatabases.shared.database) {
+                    exec("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'") { rs ->
+                        generateSequence { if (rs.next()) rs.getString(1) else null }.toList()
+                    }!!
+                }
+            io.kotest.assertions.withClue("history=$rows indexes=$indexes waitlist=$waitlistIndexes tables=$tables") {
+                listOf("2 ", "3 ", "4 ").forEach { version -> rows.any { it.startsWith(version) } shouldBe true }
                 indexes.any { it.contains("ux_appointments_active_slot") && it.contains("WHERE") } shouldBe true
+                waitlistIndexes.any { it.contains("ux_waitlist_waiting") && it.contains("UNIQUE") && it.contains("WHERE") } shouldBe true
+                ("patient_no_shows" in tables) shouldBe false
             }
         }
     })

@@ -174,4 +174,23 @@ class AuthTest :
                 }
             }
         }
+
+        context("token lifetime") {
+            test("a token without an exp claim is rejected with 401 (expiry is mandatory, not optional)") {
+                clinicApp {
+                    val practitioner = createPractitioner()
+                    val eternal =
+                        com.auth0.jwt.JWT
+                            .create()
+                            .withIssuer(TEST_ISSUER)
+                            .withSubject("staff-1")
+                            .withClaim(ROLE_CLAIM, "clinic_staff")
+                            .sign(
+                                com.auth0.jwt.algorithms.Algorithm
+                                    .HMAC256(TEST_SIGNING_KEY),
+                            )
+                    get("/practitioners/${practitioner.id}", eternal).shouldBeProblem(HttpStatusCode.Unauthorized, "unauthenticated")
+                }
+            }
+        }
     })

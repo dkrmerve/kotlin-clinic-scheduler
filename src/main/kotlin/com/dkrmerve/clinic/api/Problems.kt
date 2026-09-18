@@ -119,6 +119,8 @@ fun StatusPagesConfig.problemDetails(time: ApiTime) {
     exception<ExposedSQLException> { call, cause ->
         if (cause.sqlState == "23505") {
             call.respondProblem(HttpStatusCode.Conflict, "conflict", "The request collides with existing data (unique constraint)")
+        } else if (cause.sqlState == "40P01" || cause.sqlState == "40001") {
+            call.respondProblem(HttpStatusCode.Conflict, "concurrent_modification", "The request collided with a concurrent one; retry it")
         } else {
             log.error("Database error (correlationId={})", call.callId, cause)
             call.respondProblem(HttpStatusCode.InternalServerError, "internal_error", "An unexpected error occurred")
