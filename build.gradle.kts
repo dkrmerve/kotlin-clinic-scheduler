@@ -35,6 +35,8 @@ dependencies {
     implementation(libs.micrometer.prometheus)
     implementation(libs.logback)
     implementation(libs.logstash.encoder)
+    // Security floor: logstash-logback-encoder 9.0 ships Jackson 3.0.1 (CVE-2026-29062, CVE-2026-54512, CVE-2026-54513).
+    implementation(platform(libs.jackson3.bom))
 
     testImplementation(libs.bundles.kotest)
     testImplementation(libs.ktor.server.test.host)
