@@ -37,6 +37,8 @@ dependencies {
     implementation(libs.logstash.encoder)
     // Security floor: logstash-logback-encoder 9.0 ships Jackson 3.0.1 (CVE-2026-29062, CVE-2026-54512, CVE-2026-54513).
     implementation(platform(libs.jackson3.bom))
+    // Jackson 2 arrives through java-jwt / jwks-rsa (ktor-server-auth-jwt); 2.22.0 has MEDIUM CVEs fixed in 2.22.1+.
+    implementation(platform(libs.jackson2.bom))
 
     testImplementation(libs.bundles.kotest)
     testImplementation(libs.ktor.server.test.host)

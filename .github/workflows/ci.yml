@@ -66,6 +66,8 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
+          # Without this the SARIF format reports (and fails on) every severity, not just the ones above.
+          limit-severities-for-sarif: true
           ignore-unfixed: true
           exit-code: "1"
 

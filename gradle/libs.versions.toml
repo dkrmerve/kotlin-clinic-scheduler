@@ -9,6 +9,7 @@ h2 = "2.5.250"
 logback = "1.6.3"
 logstash = "9.0"
 jackson3 = "3.1.6"
+jackson2 = "2.22.2"
 micrometer = "1.17.1"
 serialization-json = "1.11.0"
 kotest = "6.2.5"
@@ -45,6 +46,7 @@ h2 = { module = "com.h2database:h2", version.ref = "h2" }
 logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 logstash-encoder = { module = "net.logstash.logback:logstash-logback-encoder", version.ref = "logstash" }
 jackson3-bom = { module = "tools.jackson:jackson-bom", version.ref = "jackson3" }
+jackson2-bom = { module = "com.fasterxml.jackson:jackson-bom", version.ref = "jackson2" }
 kotest-runner = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
 kotest-assertions = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 kotest-property = { module = "io.kotest:kotest-property", version.ref = "kotest" }
