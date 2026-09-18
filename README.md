@@ -205,7 +205,7 @@ with two claims: `sub` (who) and `role` (one of `patient`, `clinic_staff`, `admi
 | Mode | Selected when | Verification |
 |------|---------------|--------------|
 | **Production (OIDC)** | `AUTH_JWKS_URL`, `AUTH_ISSUER` and `AUTH_AUDIENCE` are all set | RS256 signatures checked against the issuer's JWKS (cached, rate-limited), `iss` and `aud` enforced, 5 s leeway. |
-| **Development (HMAC)** | otherwise | HS256 with `AUTH_DEV_SIGNING_KEY` (min 32 characters, no default). With `AUTH_DEV_ISSUER_ENABLED=true` the service also exposes `POST /auth/token {"subject","role"}` that mints 1-hour tokens. That route does not exist unless enabled. |
+| **Development (HMAC)** | otherwise | HS256 with `AUTH_DEV_SIGNING_KEY` (min 32 characters, no default). `exp` is mandatory in both modes: a token without it is rejected, it does not live forever. With `AUTH_DEV_ISSUER_ENABLED=true` the service also exposes `POST /auth/token {"subject","role"}` that mints 1-hour tokens. That route does not exist unless enabled. |
 
 Plugging in an identity provider: configure a client/application in Keycloak, Auth0 or Microsoft Entra ID with a
 custom `role` claim (Keycloak: a "User Attribute" or "Hardcoded claim" mapper; Auth0: an Action that adds the claim;
@@ -354,7 +354,8 @@ reported together before the process exits with status 1 (`ConfigException`). On
 | `AUTH_DEV_SIGNING_KEY` | required in dev mode | HS256 secret, >= 32 characters |
 | `AUTH_DEV_ISSUER` | `clinic-scheduler-dev` | `iss` claim in dev mode |
 | `AUTH_DEV_ISSUER_ENABLED` | `false` | Exposes `POST /auth/token`; refused in OIDC mode |
-| `RATE_LIMIT_PER_MINUTE` | `120` | POST requests per minute per client address |
+| `RATE_LIMIT_PER_MINUTE` | `120` | POST requests per minute per authenticated subject (per client address for anonymous calls) |
+| `TRUST_PROXY_HEADERS` | `false` | Honour `X-Forwarded-For`/`-Proto`/`-Host` (Ktor `XForwardedHeaders`). Enable only behind a trusted proxy: otherwise any client can spoof its address and escape the per-address rate limit. |
 | `MAX_BODY_BYTES` | `65536` | Request body limit |
 | `SHUTDOWN_GRACE_MS` / `SHUTDOWN_TIMEOUT_MS` | `2000` / `10000` | Ktor graceful shutdown |
 | `LOG_LEVEL` | `INFO` | Root log level |
@@ -366,10 +367,13 @@ reported together before the process exits with status 1 (`ConfigException`). On
   (`DatabaseFactory` picks the folder from the JDBC driver metadata). All instants are `timestamptz` written in UTC.
   Foreign keys are `ON DELETE RESTRICT`. Indexes: `appointments(practitioner_id, start_at)`,
   `appointments(patient_id, start_at)`, `waitlist_entries(practitioner_id, entry_date, created_at)`,
-  `time_off(practitioner_id, from_at, to_at)`, `patient_no_shows(patient_id, occurred_at)`.
+  `time_off(practitioner_id, from_at, to_at)`.
 - **Last line of defence:** `CREATE UNIQUE INDEX ux_appointments_active_slot ON appointments (practitioner_id, start_at)
   WHERE status IN ('Booked','CheckedIn')`. Two active appointments can never share a start, whatever the application does.
-  A violation surfaces as 409 `slot_taken`.
+  A violation surfaces as 409 `slot_taken`. Likewise `ux_waitlist_waiting (practitioner_id, patient_id, entry_date)
+  WHERE status = 'Waiting'` guarantees one waiting entry per patient and day (409 `waitlist_duplicate`).
+- **No duplicated state:** a patient's no-shows are the appointments in status `NoShow` (migration V3 dropped the
+  earlier copy). The block (`blocked_until`) and the late-cancellation counter are the only derived values stored.
 - **Optimistic locking:** `appointments.version` is checked on every update; a stale version is 409 `concurrent_modification`.
 - **Connections:** HikariCP configured explicitly (see table above), `autoCommit=false`, READ COMMITTED. Startup opens the
   pool, then retries migration with exponential backoff until `DB_STARTUP_RETRY_SECONDS` is spent, so
@@ -387,7 +391,9 @@ reported together before the process exits with status 1 (`ConfigException`). On
 | Operation | Mechanism | Proven by |
 |-----------|-----------|-----------|
 | `POST /appointments` (also reschedule and waitlist promotion) | `SELECT ... FOR UPDATE` on the practitioner row, then on the patient row (always that order, so no deadlock cycle); every rule then reads committed state. Partial unique index as backstop. | `ConcurrencyTest`: 10 parallel bookings of one slot -> exactly one 201; 6 parallel bookings on a 1/day practitioner -> exactly one 201; one patient booking 4 practitioners at once -> exactly one 201. `ExposedRepositoriesTest`: a raw insert bypassing the domain is rejected by the index (SQLSTATE 23505). |
-| `cancel`, `check-in`, `complete`, `no-show`, `reschedule` | Optimistic `version` column: `UPDATE ... WHERE id = ? AND version = ?`; zero rows -> 409 `concurrent_modification`. The state machine catches the case where the second request reads the already-committed row. | `ConcurrencyTest`: two parallel cancels -> one 200 + one 409, history grows by exactly one; parallel check-in vs cancel -> exactly one wins. `ExposedRepositoriesTest`: stale version -> `ConcurrencyException`. |
+| `cancel`, `no-show`, `reschedule` | Same row locks as booking, taken first (practitioners sorted by id, then the patient) before any write, so a cancel or reschedule can never deadlock with a concurrent booking; the late-cancellation counter and the no-show block are computed under the patient lock. Optimistic `version` column on top: `UPDATE ... WHERE id = ? AND version = ?`; zero rows -> 409 `concurrent_modification`. PostgreSQL deadlock/serialization SQLSTATEs (40P01, 40001) are also mapped to 409 `concurrent_modification` (retryable), never 500. | `ConcurrencyTest`: 20 rounds of a late-window reschedule racing a booking for the same patient and practitioner -> never a 5xx, exactly one winner; two parallel no-shows -> both recorded; two parallel cancels -> one 200 + one 409. `ProblemMappingTest`: 40P01/40001 -> 409. |
+| `check-in`, `complete` | Optimistic `version` column; the state machine catches the case where the second request reads the already-committed row. | `ConcurrencyTest`: parallel check-in vs clinic cancel -> one loses with 409 or they serialise into Booked -> CheckedIn -> Cancelled, never a 5xx. `ExposedRepositoriesTest`: stale version -> `ConcurrencyException`. |
+| `POST /waitlist` | Patient row lock inside the join transaction, plus partial unique index `ux_waitlist_waiting (practitioner_id, patient_id, entry_date) WHERE status = 'Waiting'` mapped to 409 `waitlist_duplicate`. | `ConcurrencyTest`: 5 parallel joins -> exactly one 201. `PostgresSchemaTest`: the index exists. |
 | Waitlist promotion after cancel | Runs inside the cancel transaction, holding the same row locks through `BookingEngine`. | `WaitlistApiTest`: cancellation and promoted booking visible together; promotion failure keeps the cancellation. |
 | `POST /practitioners`, `POST /patients`, time-off | Plain inserts with fresh UUIDs; no contention. | - |
 
@@ -400,8 +406,8 @@ different lock semantics.
 ```
                        ./gradlew test                 ./gradlew integrationTest        docker build
   domain (Kotest)      176 tests, fixed Clock         -                                x
-  api (Ktor testApp)   126 tests on H2 PostgreSQL     126 tests on PostgreSQL 16       x  (H2)
-  infrastructure       20 tests on H2                 ~20 tests on PostgreSQL (+index)  x  (H2)
+  api (Ktor testApp)   112 tests on H2 (8 PG-only skipped)   120 tests on PostgreSQL 16  x  (H2)
+  infrastructure       20 tests on H2 (1 PG-only skipped)    21 tests on PostgreSQL       x  (H2)
   config               5 tests                        -                                x
 ```
 
@@ -421,11 +427,11 @@ different lock semantics.
 
 | Layer | Lines | Branches | Gate |
 |-------|-------|----------|------|
-| overall | 98.1 % | 75.0 % | 90 % lines |
+| overall | 97.9 % | 75.0 % | 90 % lines |
 | domain | 97.3 % | 96.2 % | 95 % lines, 95 % branches |
-| application | 98.0 % | 95.2 % | 90 % lines |
-| api | 98.1 % | 62.0 % | 85 % lines |
-| infrastructure | 99.3 % | 91.9 % | 85 % lines |
+| application | 98.1 % | 95.5 % | 90 % lines |
+| api | 97.9 % | 62.7 % | 85 % lines |
+| infrastructure | 98.7 % | 89.1 % | 85 % lines |
 
 One row per test, with the scenario and rule it covers, is in [docs/TEST-CATALOG.md](docs/TEST-CATALOG.md).
 
@@ -454,7 +460,12 @@ Each bullet names the test that pins it (class > test).
   -> 409; promotion inside the cancel transaction; promotion failure keeps the cancellation. `WaitlistApiTest`.
 - **Reschedule atomicity**: invalid new slot -> old stays Booked with no history entry and version 0; late-window reschedule
   applies the late penalty; closed window refused; identical slot is a 200 no-op. `AppointmentApiTest > reschedule`.
-- **Concurrency**: see the table above. `ConcurrencyTest`, `ExposedRepositoriesTest`.
+- **Concurrency**: see the table above, including the reschedule-vs-booking deadlock race (20 rounds, never a 5xx),
+  parallel no-shows on one patient and parallel waitlist joins. `ConcurrencyTest`, `ExposedRepositoriesTest`.
+- **Review regressions**: a retroactively recorded (older) no-show is stored once and still triggers the block;
+  rescheduling a Cancelled/Completed appointment to its own slot is 409, not a silent 200; a JWT without `exp` is 401;
+  rate limiting is per subject so one busy client cannot starve another. `AppointmentApiTest > review regressions`,
+  `AuthTest > token lifetime`, `OperationsTest > rate limiting keys`.
 - **Availability**: empty on a time-off day, filters ends past closing, respects buffer and capacity, past/too-far dates 422,
   invalid date/type 400 with allowed values. `PractitionerApiTest > availability`.
 - **Input hardening**: unknown type -> 400 listing allowed values; malformed/empty JSON -> 400 `malformed_request`; wrong field
@@ -477,8 +488,9 @@ Each bullet names the test that pins it (class > test).
   status), JVM memory/GC/threads, HikariCP pool (`hikaricp_connections_*`). Suggested alerts: readiness failing for
   > 1 min; 5xx rate > 1 %; p95 latency of `POST /appointments` > 500 ms; `hikaricp_connections_pending` > 0 for > 30 s;
   JVM heap after GC > 80 %.
-- **Limits**: `RATE_LIMIT_PER_MINUTE` POSTs per client address (429 `rate_limited`), `MAX_BODY_BYTES` (413),
-  Netty header/line limits, 30 s read/write timeouts.
+- **Limits**: `RATE_LIMIT_PER_MINUTE` POSTs per authenticated subject, or per client address for anonymous calls
+  (429 `rate_limited`); behind a proxy set `TRUST_PROXY_HEADERS=true` so the address comes from `X-Forwarded-For`.
+  `MAX_BODY_BYTES` (413), Netty header/line limits, 30 s read/write timeouts.
 - **Shutdown**: SIGTERM -> Ktor stops accepting, drains in-flight requests for `SHUTDOWN_GRACE_MS`, hard stop at
   `SHUTDOWN_TIMEOUT_MS`, pool closed. The JVM runs with `-XX:+UseContainerSupport -XX:MaxRAMPercentage=75
   -XX:+ExitOnOutOfMemoryError`; compose caps the container at 768 MB.
@@ -549,6 +561,11 @@ kotlin-clinic-scheduler/
 - **Path ids that are not UUIDs are 404**, not 400: such an id cannot name anything.
 - **Lazy expiry** of waitlist entries and derived blocking avoid a scheduler; see the roadmap for the job that would
   make reporting queries simpler.
+- **No-shows are never stored twice**: `Patient.noShows` is read from the `NoShow` appointments, so a no-show recorded
+  late for an older appointment cannot be lost or duplicated.
+- **Row locks are taken in one global order** (practitioners by id, then the patient) by booking, cancel, reschedule,
+  no-show and waitlist join alike; a deadlock is therefore not expected, and if PostgreSQL ever reports one it becomes a
+  retryable 409 rather than a 500.
 
 ## Trade-offs
 
@@ -558,8 +575,8 @@ kotlin-clinic-scheduler/
   locks), so the same suites run again on PostgreSQL and that run is the source of truth.
 - **Row locks instead of SERIALIZABLE**: predictable, no retry loop needed; the price is that all bookings of one practitioner
   are serialised (fine at clinic scale).
-- **Per-request rate limit keyed by client address**: simple and dependency-free; behind a proxy it needs the
-  `X-Forwarded-For` plugin, and a multi-instance deployment needs a shared store.
+- **In-memory rate limit keyed by subject / client address**: simple and dependency-free; behind a proxy it needs
+  `TRUST_PROXY_HEADERS=true`, and a multi-instance deployment needs a shared store.
 - **Kotest 6 + ktlint_official style**: strict formatting is enforced by the build; some wrapped signatures are more
   vertical than hand-written code would be.
 
@@ -571,9 +588,11 @@ kotlin-clinic-scheduler/
   caching and RS256 verification are Ktor/auth0 library behaviour and would need a mock JWKS server (roadmap).
 - Rate limiting keyed by real client addresses behind a proxy, and the Netty timeouts/limits (framework configuration).
 - Long-running behaviour: pool leak detection, `maxLifetime` rotation, memory under sustained load.
-- Deadlock scenarios beyond the documented lock order (practitioner then patient); the order is enforced by code, not by a test.
-- Waitlist promotion racing with a concurrent direct booking of the same freed slot is covered indirectly (same row lock),
+- Deadlock scenarios other than reschedule-vs-booking (which has a 20-round parallel test); the global lock order is
+  enforced by code (`AppointmentService.lockRows`, `BookingEngine.book`), not by a static check.
+- Waitlist promotion racing with a concurrent direct booking of the same freed slot is covered indirectly (same row locks),
   but there is no dedicated parallel test for it.
+- `XForwardedHeaders` is tested for the rate-limit key only, not for scheme/host rewriting.
 - Trivy findings themselves: the scan runs in CI but the base image has not been pinned to a digest yet.
 
 ## Before going to production
@@ -586,11 +605,13 @@ kotlin-clinic-scheduler/
 - [ ] Review request limits for your traffic: `RATE_LIMIT_PER_MINUTE`, `MAX_BODY_BYTES`, pool size vs. PostgreSQL `max_connections`.
 - [ ] Set container CPU/memory requests and limits and match `DB_POOL_MAX` to them.
 - [ ] Scrape `/metrics`, ship the JSON logs, and configure the alerts listed under Operations.
-- [ ] Pin base images by digest (`eclipse-temurin@sha256:...`, `postgres@sha256:...`) and act on Trivy findings.
+- [ ] Pin base images by digest (`eclipse-temurin@sha256:...`, `postgres@sha256:...`). CI already fails on CRITICAL/HIGH
+      Trivy findings (`exit-code: 1`, unfixed ones ignored); keep it that way and rebuild when the base image is patched.
+- [ ] Set `TRUST_PROXY_HEADERS=true` only once the service sits behind a proxy that overwrites `X-Forwarded-For`.
 - [ ] Automate PostgreSQL backups and test a restore; enable point-in-time recovery for the appointments data.
-- [ ] Decide the retention of `appointment_history` and `patient_no_shows` (personal data) and document it.
+- [ ] Decide the retention of `appointment_history` and of NoShow appointments (personal data) and document it.
 - [ ] Run the migrations from a CI/CD step or an init container in multi-replica deployments so only one process migrates.
-- [ ] Add a `X-Forwarded-For`-aware rate-limit key and a shared store if more than one replica runs.
+- [ ] Use a shared rate-limit store (Redis) if more than one replica runs; the bucket is in-memory per instance.
 
 ## Roadmap / TODO
 

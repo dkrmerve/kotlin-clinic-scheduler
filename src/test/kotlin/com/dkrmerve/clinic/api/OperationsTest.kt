@@ -135,4 +135,33 @@ class OperationsTest :
                 }
             }
         }
+
+        context("rate limiting keys") {
+            test("authenticated POSTs are limited per subject, so one busy client does not block another") {
+                clinicApp(config = testConfig(rateLimitPerMinute = 2)) {
+                    val other = DevTokenIssuer(TEST_SIGNING_KEY, TEST_ISSUER, java.time.Clock.systemUTC()).issue("staff-2", Role.ClinicStaff)
+                    repeat(2) { post("/patients", staff, CreatePatientRequest("A", "a$it@example.test")).status shouldBe HttpStatusCode.Created }
+                    post(
+                        "/patients",
+                        staff,
+                        CreatePatientRequest("A", "a3@example.test"),
+                    ).shouldBeProblem(HttpStatusCode.TooManyRequests, "rate_limited")
+                    post("/patients", other, CreatePatientRequest("B", "b@example.test")).status shouldBe HttpStatusCode.Created
+                }
+            }
+
+            test("X-Forwarded-For separates anonymous clients only when TRUST_PROXY_HEADERS=true") {
+                suspend fun ClinicTestContext.mint(forwardedFor: String) =
+                    post("/auth/token", null, TokenRequest("someone", "patient")) { header("X-Forwarded-For", forwardedFor) }.status
+                clinicApp(config = testConfig(rateLimitPerMinute = 2, trustProxyHeaders = true)) {
+                    repeat(2) { mint("10.0.0.1") shouldBe HttpStatusCode.OK }
+                    mint("10.0.0.1") shouldBe HttpStatusCode.TooManyRequests
+                    mint("10.0.0.2") shouldBe HttpStatusCode.OK
+                }
+                clinicApp(config = testConfig(rateLimitPerMinute = 2, trustProxyHeaders = false)) {
+                    repeat(2) { mint("10.0.0.1") shouldBe HttpStatusCode.OK }
+                    mint("10.0.0.2") shouldBe HttpStatusCode.TooManyRequests // header ignored: same client address
+                }
+            }
+        }
     })

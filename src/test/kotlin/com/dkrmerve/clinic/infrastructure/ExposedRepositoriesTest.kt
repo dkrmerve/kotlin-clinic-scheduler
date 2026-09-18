@@ -105,19 +105,40 @@ class ExposedRepositoriesTest :
         }
 
         context("patients") {
-            test("save + findById round-trips no-shows (append-only), late cancellations and blockedUntil") {
-                val original =
-                    patient(
-                        noShows = listOf(NOW.minus(Duration.ofDays(3)), NOW.minus(Duration.ofDays(1))),
-                        lateCancellations = 2,
-                        blockedUntil = NOW.plus(Duration.ofDays(5)),
-                    )
+            test("save + findById round-trips late cancellations and blockedUntil; unknown id is null") {
+                val original = patient(lateCancellations = 2, blockedUntil = NOW.plus(Duration.ofDays(5)))
                 tx { patients.save(original) }
                 tx { patients.findById(original.id) } shouldBe original
-                val updated = original.copy(noShows = original.noShows + NOW, lateCancellations = 3, blockedUntil = null)
+                val updated = original.copy(lateCancellations = 3, blockedUntil = null)
                 tx { patients.save(updated) }
                 tx { patients.findById(original.id) } shouldBe updated
                 tx { patients.findById(PatientId.new()) }.shouldBeNull()
+            }
+
+            test("no-shows are derived from NoShow appointments (oldest first), never stored a second time") {
+                val (practitioner, patient) = saved()
+                val later = at(TUESDAY.plusDays(7), 10, 0)
+                val earlier = at(TUESDAY, 10, 0)
+                listOf(later, earlier).forEach { start ->
+                    val a = Appointment.book(practitioner.id, patient.id, AppointmentType.Consultation, start, NOW, Actor.Clinic)
+                    tx { appointments.save(a.transitionTo(AppointmentStatus.NoShow, Actor.Clinic, NOW)) }
+                }
+                tx {
+                    appointments.save(
+                        Appointment.book(
+                            practitioner.id,
+                            patient.id,
+                            AppointmentType.Consultation,
+                            at(TUESDAY.plusDays(1), 10, 0),
+                            NOW,
+                            Actor.Clinic,
+                        ),
+                    )
+                }
+                tx { patients.findById(patient.id)!! }.noShows shouldContainExactly listOf(earlier, later)
+                // An in-memory no-show list passed to save() is not persisted: the appointments are the source of truth.
+                tx { patients.save(patient.copy(noShows = listOf(NOW))) }
+                tx { patients.findById(patient.id)!! }.noShows shouldContainExactly listOf(earlier, later)
             }
         }
 

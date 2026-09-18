@@ -24,6 +24,7 @@ ktor-server-call-logging = { module = "io.ktor:ktor-server-call-logging", versio
 ktor-server-call-id = { module = "io.ktor:ktor-server-call-id", version.ref = "ktor" }
 ktor-server-rate-limit = { module = "io.ktor:ktor-server-rate-limit", version.ref = "ktor" }
 ktor-server-body-limit = { module = "io.ktor:ktor-server-body-limit", version.ref = "ktor" }
+ktor-server-forwarded-header = { module = "io.ktor:ktor-server-forwarded-header", version.ref = "ktor" }
 ktor-server-auth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
 ktor-server-auth-jwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
 ktor-server-metrics-micrometer = { module = "io.ktor:ktor-server-metrics-micrometer", version.ref = "ktor" }
@@ -57,6 +58,7 @@ ktor-server = [
     "ktor-server-call-id",
     "ktor-server-rate-limit",
     "ktor-server-body-limit",
+    "ktor-server-forwarded-header",
     "ktor-server-auth",
     "ktor-server-auth-jwt",
     "ktor-server-metrics-micrometer",

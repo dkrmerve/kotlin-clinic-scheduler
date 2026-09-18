@@ -69,7 +69,9 @@ class AppointmentService(
         note: String? = null,
     ): CancellationResult =
         uow.transaction {
-            val cancelled = cancelInside(appointments.require(id), actor, note)
+            val appointment = appointments.require(id)
+            lockRows(listOf(appointment.practitionerId), appointment.patientId)
+            val cancelled = cancelInside(appointment, actor, note)
             CancellationResult(cancelled, waitlist.promoteFor(cancelled))
         }
 
@@ -89,31 +91,39 @@ class AppointmentService(
             transition(id, AppointmentStatus.Completed, actor)
         }
 
-    /** Rule 8: only after the start time (the route restricts it to clinic roles); may block the patient. */
+    /**
+     * Rule 8: only after the start time (the route restricts it to clinic roles); may block the patient.
+     * The patient's no-show history is derived from NoShow appointments, so the patient is loaded before
+     * this appointment is saved and the new occurrence is added in memory exactly once.
+     */
     suspend fun markNoShow(
         id: AppointmentId,
         actor: Actor,
     ): Appointment =
         uow.transaction {
             val appointment = appointments.require(id)
+            lockRows(listOf(appointment.practitionerId), appointment.patientId)
             rules.checkNoShowAllowed(appointment)
             val now = rules.now()
+            val patient = patients.require(appointment.patientId)
             val updated = appointments.save(appointment.transitionTo(AppointmentStatus.NoShow, actor, now))
-            patients.save(patients.require(appointment.patientId).recordNoShow(appointment.start, now, policy))
+            patients.save(patient.recordNoShow(appointment.start, now, policy))
             updated
         }
 
     /**
      * Rule 10: atomic cancel + book. Both happen in one transaction, so if any rule rejects the new slot the
-     * whole thing rolls back and the original appointment is untouched. Rescheduling to the identical slot
-     * is a no-op that returns the current appointment.
+     * whole thing rolls back and the original appointment is untouched. Rescheduling a Booked appointment to
+     * its identical slot is a no-op that returns the current appointment.
      */
     suspend fun reschedule(cmd: Reschedule): RescheduleResult =
         uow.transaction {
             val current = appointments.require(cmd.appointmentId)
             val practitioner = practitioners.require(cmd.newPractitionerId ?: current.practitionerId)
+            lockRows(listOf(current.practitionerId, practitioner.id), current.patientId)
             val type = cmd.newType ?: current.type
-            if (practitioner.id == current.practitionerId && type == current.type && cmd.newStart == current.start) {
+            val sameSlot = practitioner.id == current.practitionerId && type == current.type && cmd.newStart == current.start
+            if (sameSlot && current.status == AppointmentStatus.Booked) {
                 return@transaction RescheduleResult(current, current, promoted = null, noOp = true)
             }
             val patient = patients.require(current.patientId)
@@ -138,4 +148,16 @@ class AppointmentService(
         to: AppointmentStatus,
         actor: Actor,
     ): Appointment = appointments.save(appointments.require(id).transitionTo(to, actor, rules.now()))
+
+    /**
+     * Row locks in the global order (practitioners by id, then the patient) before any write, so a cancel,
+     * no-show or reschedule can never deadlock with a booking that takes the same locks in BookingEngine.
+     */
+    private fun lockRows(
+        practitionerIds: List<PractitionerId>,
+        patientId: PatientId,
+    ) {
+        practitionerIds.distinct().sortedBy { it.value }.forEach(practitioners::lockForBooking)
+        patients.lockForBooking(patientId)
+    }
 }

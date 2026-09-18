@@ -41,6 +41,7 @@ class WaitlistService(
     suspend fun join(cmd: JoinWaitlist): WaitlistEntry =
         uow.transaction {
             val practitioner = practitioners.require(cmd.practitionerId)
+            patients.lockForBooking(cmd.patientId) // serialises duplicate joins; the partial unique index is the backstop
             val patient = patients.require(cmd.patientId)
             rules.checkPatientNotBlocked(patient)
             if (cmd.date.isBefore(

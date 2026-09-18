@@ -46,11 +46,6 @@ object PatientsTable : Table("patients") {
     override val primaryKey = PrimaryKey(id)
 }
 
-object PatientNoShowsTable : Table("patient_no_shows") {
-    val patientId = javaUUID("patient_id")
-    val occurredAt = timestampWithTimeZone("occurred_at")
-}
-
 object AppointmentsTable : Table("appointments") {
     val id = javaUUID("id")
     val practitionerId = javaUUID("practitioner_id")
