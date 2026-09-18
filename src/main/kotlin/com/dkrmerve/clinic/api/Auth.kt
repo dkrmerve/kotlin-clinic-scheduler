@@ -87,6 +87,7 @@ fun AuthenticationConfig.clinicJwt(settings: AuthSettings) {
                         .build()
                 verifier(provider, settings.issuer) {
                     withAudience(settings.audience)
+                    withClaimPresence("exp") // a token without exp would otherwise never expire
                     acceptLeeway(LEEWAY_SECONDS)
                 }
             }
@@ -96,6 +97,7 @@ fun AuthenticationConfig.clinicJwt(settings: AuthSettings) {
                     JWT
                         .require(Algorithm.HMAC256(settings.signingKey))
                         .withIssuer(settings.issuer)
+                        .withClaimPresence("exp")
                         .acceptLeeway(LEEWAY_SECONDS)
                         .build(),
                 )

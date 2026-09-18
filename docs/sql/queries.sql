@@ -17,14 +17,15 @@ WHERE (a.start_at AT TIME ZONE 'Europe/Amsterdam')::date = CURRENT_DATE + 1   --
 ORDER BY pr.name, a.start_at;
 
 -- 2. No-show counts per patient in the rolling 90-day window, with the derived "blocked" flag
+--    (no-shows are the appointments in status NoShow; there is no separate table)
 SELECT pa.name,
        pa.email,
-       COUNT(ns.occurred_at) FILTER (WHERE ns.occurred_at >= now() - INTERVAL '90 days') AS no_shows_90d,
+       COUNT(a.id) FILTER (WHERE a.status = 'NoShow' AND a.start_at >= now() - INTERVAL '90 days') AS no_shows_90d,
        pa.late_cancellations,
        pa.blocked_until,
-       (pa.blocked_until IS NOT NULL AND pa.blocked_until > now())                        AS blocked_now
+       (pa.blocked_until IS NOT NULL AND pa.blocked_until > now())                                   AS blocked_now
 FROM patients pa
-LEFT JOIN patient_no_shows ns ON ns.patient_id = pa.id
+LEFT JOIN appointments a ON a.patient_id = pa.id
 GROUP BY pa.id
 ORDER BY no_shows_90d DESC, pa.name;
 
@@ -66,8 +67,8 @@ JOIN practitioners pr ON pr.id = a.practitioner_id
 GROUP BY pr.id, day
 ORDER BY day, pr.name;
 
--- 6. The last line of defence: the partial unique index on active appointments
-SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'appointments';
+-- 6. The last line of defence: the partial unique indexes on active appointments and waiting entries
+SELECT indexname, indexdef FROM pg_indexes WHERE tablename IN ('appointments', 'waitlist_entries') AND indexname LIKE 'ux_%';
 
 -- 7. Applied migrations
 SELECT installed_rank, version, description, success, installed_on FROM flyway_schema_history ORDER BY installed_rank;

@@ -20,6 +20,8 @@ data class AppConfig(
     val policy: SchedulingPolicy,
     val auth: AuthSettings,
     val rateLimitPerMinute: Int,
+    /** Honour X-Forwarded-* headers (client address for rate limiting, scheme, host). Only behind a trusted proxy. */
+    val trustProxyHeaders: Boolean,
     val maxBodyBytes: Long,
     val shutdownGrace: Duration,
     val shutdownTimeout: Duration,
@@ -50,6 +52,7 @@ data class AppConfig(
                         policy = policy(),
                         auth = auth(),
                         rateLimitPerMinute = int("RATE_LIMIT_PER_MINUTE", 120, 1..100_000),
+                        trustProxyHeaders = bool("TRUST_PROXY_HEADERS", false),
                         maxBodyBytes = int("MAX_BODY_BYTES", 65_536, 1024..10_485_760).toLong(),
                         shutdownGrace = millis("SHUTDOWN_GRACE_MS", 2_000),
                         shutdownTimeout = millis("SHUTDOWN_TIMEOUT_MS", 10_000),

@@ -174,14 +174,6 @@ class ExposedPatientRepository : PatientRepository {
                 fill(it, patient)
             }
         }
-        // No-shows are append-only: persist only the tail that is not stored yet.
-        val stored = PatientNoShowsTable.selectAll().where { PatientNoShowsTable.patientId eq patient.id.value }.count()
-        patient.noShows.drop(stored.toInt()).forEach { at ->
-            PatientNoShowsTable.insert {
-                it[patientId] = patient.id.value
-                it[occurredAt] = at.toDb()
-            }
-        }
     }
 
     private fun fill(
@@ -196,12 +188,13 @@ class ExposedPatientRepository : PatientRepository {
 
     override fun findById(id: PatientId): Patient? {
         val row = PatientsTable.selectAll().where { PatientsTable.id eq id.value }.singleOrNull() ?: return null
+        // No-shows are not stored twice: they are the patient's appointments in status NoShow (rule 8).
         val noShows =
-            PatientNoShowsTable
+            AppointmentsTable
                 .selectAll()
-                .where { PatientNoShowsTable.patientId eq id.value }
-                .orderBy(PatientNoShowsTable.occurredAt, SortOrder.ASC)
-                .map { it[PatientNoShowsTable.occurredAt].asInstant() }
+                .where { (AppointmentsTable.patientId eq id.value) and (AppointmentsTable.status eq AppointmentStatus.NoShow.label) }
+                .orderBy(AppointmentsTable.startAt, SortOrder.ASC)
+                .map { it[AppointmentsTable.startAt].asInstant() }
         return Patient(
             id = id,
             name = row[PatientsTable.name],
@@ -437,16 +430,27 @@ class ExposedWaitlistRepository : WaitlistRepository {
                 it[fulfilledBy] = entry.fulfilledBy?.value
             }
         } else {
-            WaitlistTable.insert {
-                it[id] = entry.id.value
-                it[practitionerId] = entry.practitionerId.value
-                it[patientId] = entry.patientId.value
-                it[entryDate] = entry.date
-                it[type] = entry.type.name
-                it[createdAt] = entry.createdAt.toDb()
-                it[status] = entry.status.name
-                it[fulfilledBy] = entry.fulfilledBy?.value
+            try {
+                insert(entry)
+            } catch (e: ExposedSQLException) {
+                if (e.isUniqueViolation()) {
+                    throw ConflictException.waitlistDuplicate("Patient is already waiting for practitioner ${entry.practitionerId} on ${entry.date}")
+                }
+                throw e
             }
+        }
+    }
+
+    private fun insert(entry: WaitlistEntry) {
+        WaitlistTable.insert {
+            it[id] = entry.id.value
+            it[practitionerId] = entry.practitionerId.value
+            it[patientId] = entry.patientId.value
+            it[entryDate] = entry.date
+            it[type] = entry.type.name
+            it[createdAt] = entry.createdAt.toDb()
+            it[status] = entry.status.name
+            it[fulfilledBy] = entry.fulfilledBy?.value
         }
     }
 

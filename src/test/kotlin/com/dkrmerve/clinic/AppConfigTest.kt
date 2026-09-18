@@ -38,6 +38,7 @@ class AppConfigTest :
             config.policy.noShowWindow shouldBe Duration.ofDays(90)
             config.policy.blockDuration shouldBe Duration.ofDays(30)
             config.rateLimitPerMinute shouldBe 120
+            config.trustProxyHeaders shouldBe false
             config.maxBodyBytes shouldBe 65_536
             config.shutdownGrace shouldBe Duration.ofMillis(2_000)
             config.shutdownTimeout shouldBe Duration.ofMillis(10_000)
@@ -69,6 +70,7 @@ class AppConfigTest :
                             "NO_SHOW_WINDOW_DAYS" to "30",
                             "BLOCK_DAYS" to "7",
                             "RATE_LIMIT_PER_MINUTE" to "10",
+                            "TRUST_PROXY_HEADERS" to "true",
                             "MAX_BODY_BYTES" to "2048",
                             "SHUTDOWN_GRACE_MS" to "1",
                             "SHUTDOWN_TIMEOUT_MS" to "2",
@@ -88,6 +90,7 @@ class AppConfigTest :
             config.policy.noShowLimit shouldBe 2
             config.policy.blockDuration shouldBe Duration.ofDays(7)
             config.rateLimitPerMinute shouldBe 10
+            config.trustProxyHeaders shouldBe true
             config.maxBodyBytes shouldBe 2048
             val auth = config.auth.shouldBeInstanceOf<AuthSettings.DevHmac>()
             auth.issuer shouldBe "me"

@@ -1,6 +1,6 @@
 package com.dkrmerve.clinic.domain
 
-/** Who is performing an action. In this demo it comes from the X-Actor header. */
+/** Who is performing an action: derived from the JWT role (`patient` acts as the patient, staff and admin as the clinic). */
 enum class Actor {
     Patient,
     Clinic,

@@ -5,12 +5,14 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.principal
 import io.ktor.server.metrics.micrometer.MicrometerMetrics
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callIdMdc
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.forwardedheaders.XForwardedHeaders
 import io.ktor.server.plugins.origin
 import io.ktor.server.plugins.ratelimit.RateLimit
 import io.ktor.server.plugins.statuspages.StatusPages
@@ -39,6 +41,7 @@ fun Application.clinicModule(deps: Dependencies) {
         verify { it.isNotBlank() && it.length <= 128 }
         replyToHeader(CORRELATION_HEADER)
     }
+    if (config.trustProxyHeaders) install(XForwardedHeaders) // only behind a trusted proxy: clients could spoof it otherwise
     install(CallLogging) {
         level = Level.INFO
         disableDefaultColors()
@@ -57,7 +60,8 @@ fun Application.clinicModule(deps: Dependencies) {
     install(RateLimit) {
         register(WRITES_RATE_LIMIT) {
             rateLimiter(limit = config.rateLimitPerMinute, refillPeriod = 60.seconds)
-            requestKey { call -> call.request.origin.remoteAddress }
+            // One bucket per authenticated subject; anonymous calls (dev token minting) fall back to the client address.
+            requestKey { call -> call.principal<Caller>()?.subject ?: call.request.origin.remoteAddress }
         }
     }
     install(Authentication) {

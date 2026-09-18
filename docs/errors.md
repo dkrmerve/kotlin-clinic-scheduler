@@ -33,7 +33,7 @@ subtype without deciding its status is a compile error; `ProblemMappingTest` pin
 | <a id="invalid_time_off"></a>`invalid_time_off` | 400 | `ValidationException` | Time-off block from >= to, or blank reason. |
 | <a id="invalid_appointment"></a>`invalid_appointment` | 400 | `ValidationException` | Appointment end does not equal start + type duration (cannot happen through the API). |
 | <a id="invalid_policy"></a>`invalid_policy` | 400 | `ValidationException` | Scheduling policy values inconsistent (startup only). |
-| <a id="unauthenticated"></a>`unauthenticated` | 401 | `UnauthenticatedException` | Missing, expired, malformed or wrongly signed bearer token, or a token without `sub` or `role`. |
+| <a id="unauthenticated"></a>`unauthenticated` | 401 | `UnauthenticatedException` | Missing, expired, malformed or wrongly signed bearer token, or a token without `exp`, `sub` or `role`. |
 | <a id="forbidden_role"></a>`forbidden_role` | 403 | `ForbiddenException` | The token role may not call this endpoint (see README, "Authentication and authorization"). |
 | <a id="not_owner"></a>`not_owner` | 403 | `ForbiddenException` | A `patient` token acts on another patient record. |
 | <a id="patient_blocked"></a>`patient_blocked` | 403 | `PatientBlockedException` | Patient has three no-shows in 90 days; `blockedUntil` is in the body. Booking and waitlist joins are refused. |
@@ -47,9 +47,9 @@ subtype without deciding its status is a compile error; `ProblemMappingTest` pin
 | <a id="slot_taken"></a>`slot_taken` | 409 | `ConflictException` | Rule 2: overlaps an existing Booked, CheckedIn or Completed appointment of the practitioner including the buffer; also raised when the partial unique index rejects a concurrent insert. |
 | <a id="patient_conflict"></a>`patient_conflict` | 409 | `ConflictException` | Rule 5: patient already has an appointment with this practitioner that day, or an overlapping appointment elsewhere. |
 | <a id="daily_capacity_reached"></a>`daily_capacity_reached` | 409 | `ConflictException` | Rule 6: practitioner already has `maxAppointmentsPerDay` non-cancelled appointments that day. |
-| <a id="waitlist_duplicate"></a>`waitlist_duplicate` | 409 | `ConflictException` | Patient already has a Waiting entry for that practitioner and date. |
+| <a id="waitlist_duplicate"></a>`waitlist_duplicate` | 409 | `ConflictException` | Patient already has a Waiting entry for that practitioner and date (checked under the patient row lock; the partial unique index `ux_waitlist_waiting` is the backstop). |
 | <a id="no_show_before_start"></a>`no_show_before_start` | 409 | `ConflictException` | Rule 8: a no-show can only be recorded after the appointment start time. |
-| <a id="concurrent_modification"></a>`concurrent_modification` | 409 | `ConcurrencyException` | Optimistic lock: the appointment row changed since it was read (`version` mismatch). Retry the request. |
+| <a id="concurrent_modification"></a>`concurrent_modification` | 409 | `ConcurrencyException`, SQLSTATE 40P01 / 40001 | Optimistic lock: the appointment row changed since it was read (`version` mismatch), or PostgreSQL reported a deadlock / serialization failure. Retry the request. |
 | <a id="conflict"></a>`conflict` | 409 | `ExposedSQLException` (SQLSTATE 23505) | A unique constraint fired outside the booking path. |
 | <a id="payload_too_large"></a>`payload_too_large` | 413 | Ktor `RequestBodyLimit` | Body exceeds `MAX_BODY_BYTES`. |
 | <a id="unsupported_media_type"></a>`unsupported_media_type` | 415 | Ktor content negotiation | Request body is not `application/json`. |

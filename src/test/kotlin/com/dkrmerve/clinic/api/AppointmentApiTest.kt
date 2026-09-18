@@ -442,4 +442,41 @@ class AppointmentApiTest :
                 }
             }
         }
+
+        context("review regressions") {
+            test("a retroactively recorded no-show is stored exactly once and still triggers the block (no-shows derived from appointments)") {
+                clinicApp {
+                    val practitioner = createPractitioner()
+                    val patient = createPatient()
+                    val days = listOf(tuesday, tuesday.plusDays(7), tuesday.plusDays(14))
+                    val appointments = days.map { bookOk(practitioner.id, patient.id, at(it, ten)) }
+                    clock.set(at(days.last(), LocalTime.of(11, 0)))
+                    // The two recent ones first, then the oldest one retroactively: it sorts in front of the stored ones.
+                    post("/appointments/${appointments[1].id}/no-show", staff).status shouldBe HttpStatusCode.OK
+                    post("/appointments/${appointments[2].id}/no-show", staff).status shouldBe HttpStatusCode.OK
+                    get("/patients/${patient.id}", staff).body<PatientResponse>().blocked shouldBe false
+                    post("/appointments/${appointments[0].id}/no-show", staff).status shouldBe HttpStatusCode.OK
+                    val updated = get("/patients/${patient.id}", staff).body<PatientResponse>()
+                    updated.noShows shouldBe days.map { iso(at(it, ten)) }
+                    updated.blocked shouldBe true
+                }
+            }
+
+            test("rescheduling a cancelled or completed appointment to its own slot is not a no-op: 409 invalid_transition") {
+                clinicApp {
+                    val practitioner = createPractitioner()
+                    val cancelled = bookOk(practitioner.id, createPatient().id, at(tuesday, ten))
+                    val completed = bookOk(practitioner.id, createPatient().id, at(tuesday, LocalTime.of(11, 0)))
+                    post("/appointments/${cancelled.id}/cancel", staff).status shouldBe HttpStatusCode.OK
+                    post("/appointments/${completed.id}/check-in", staff).status shouldBe HttpStatusCode.OK
+                    post("/appointments/${completed.id}/complete", staff).status shouldBe HttpStatusCode.OK
+                    post("/appointments/${cancelled.id}/reschedule", staff, RescheduleRequest(cancelled.start))
+                        .shouldBeProblem(HttpStatusCode.Conflict, "invalid_transition")
+                    post("/appointments/${completed.id}/reschedule", staff, RescheduleRequest(completed.start))
+                        .shouldBeProblem(HttpStatusCode.Conflict, "invalid_transition")
+                    appointment(cancelled.id).status shouldBe "Cancelled"
+                    appointment(completed.id).status shouldBe "Completed"
+                }
+            }
+        }
     })
